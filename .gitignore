@@ -1,0 +1,11 @@
+*.db
+*.mp4
+*.vcxproj
+*.vcxproj.filters
+
+/Debug/
+/x64/
+/Test/Debug/
+/Test/x64/
+/Test/Test/Debug/
+/Test/Test/x64/
