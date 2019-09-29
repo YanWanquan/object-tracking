@@ -1,0 +1,154 @@
+C++: 
+KalmanFilter::KalmanFilter(){}
+
+KalmanFilter::KalmanFilter(int dynamParams, int measureParams, int controlParams=0, int type=CV_32F)
+		dynamParams – Dimensionality of the state.	状态向量中的元素种类数
+		measureParams – Dimensionality of the measurement.	观测的状态向量中的元素个数    
+		controlParams – Dimensionality of the control vector.	控制矩阵的列数
+		type – Type of the created matrices that should be CV_32F or CV_64F.
+
+KalmanFilter::KalmanFilter(int dynamParams, int measureParams, int controlParams, int type)
+{
+    init(dynamParams, measureParams, controlParams, type);
+}
+
+Re-initializes Kalman filter. The previous content is destroyed.
+void KalmanFilter::init(int dynamParams, int measureParams, int controlParams=0, int type=CV_32F)
+{
+    CV_Assert( DP > 0 && MP > 0 );
+    CV_Assert( type == CV_32F || type == CV_64F );
+    CP = std::max(CP, 0);
+ 
+    statePre = Mat::zeros(DP, 1, type);// DP是状态向量中的元素种类数，即状态矩阵的行数
+    statePost = Mat::zeros(DP, 1, type);
+    transitionMatrix = Mat::eye(DP, DP, type);// 状态转移矩阵A的大小为DP X DP
+ 
+    processNoiseCov = Mat::eye(DP, DP, type);// 系统噪声协方差矩阵的大小为DP X DP
+    measurementMatrix = Mat::zeros(MP, DP, type);// MP为观测的状态向量中的元素个数(MP <= DP),观测矩阵的大小为MP X DP
+    measurementNoiseCov = Mat::eye(MP, MP, type);// 观测噪声协方差矩阵大小为MP X MP
+ 
+    errorCovPre = Mat::zeros(DP, DP, type); // 预测值和真实值之间的误差协方差矩阵大小为DP X DP
+    errorCovPost = Mat::zeros(DP, DP, type);// 估计值和真实值之间的误差协方差矩阵大小为DP X DP
+    gain = Mat::zeros(DP, MP, type); // 卡尔曼增益矩阵
+ 
+    if( CP > 0 )
+        controlMatrix = Mat::zeros(DP, CP, type);// 控制矩阵
+    else
+        controlMatrix.release();
+ 
+    temp1.create(DP, DP, type);
+    temp2.create(MP, DP, type);
+    temp3.create(MP, MP, type);
+    temp4.create(MP, DP, type);
+    temp5.create(MP, 1, type);
+}
+
+Computes a predicted state. 计算预测的状态值 
+C++: const Mat& KalmanFilter::predict(const Mat& control=Mat())
+{
+    // update the state: x'(k) = A*x(k)
+    statePre = transitionMatrix*statePost;
+ 
+    if( !control.empty() )
+        // x'(k) = x'(k) + B*u(k)
+        statePre += controlMatrix*control;
+ 
+    // update error covariance matrices: temp1 = A*P(k)
+    temp1 = transitionMatrix*errorCovPost;
+ 
+    // P'(k) = temp1*At + Q
+	// errorCovPre = 1*temp1*transitionMatrix_t+1*processNoiseCov
+    gemm(temp1, transitionMatrix, 1, processNoiseCov, 1, errorCovPre, GEMM_2_T);
+ 
+    // handle the case when there will be measurement before the next predict.
+    statePre.copyTo(statePost);
+    errorCovPre.copyTo(errorCovPost);
+ 
+    return statePre;
+}
+
+Updates the predicted state from the measurement. 根据测量值更新状态值
+const Mat& KalmanFilter::correct(const Mat& measurement)
+
+{
+    // temp2 = H*P'(k)
+    temp2 = measurementMatrix * errorCovPre;
+ 
+    // temp3 = temp2*Ht + R
+    gemm(temp2, measurementMatrix, 1, measurementNoiseCov, 1, temp3, GEMM_2_T);
+ 
+    // temp4 = inv(temp3)*temp2 = Kt(k)
+    // 求解 temp3 * temp4 = temp2的问题，即temp4 = inv(temp3)*temp2
+	// 但是此时temp4不是卡尔曼增益K，而是它的转置
+	solve(temp3, temp2, temp4, DECOMP_SVD);
+ 
+    // K(k)
+	// 转置过来得到真正的K
+    gain = temp4.t();
+ 
+    // temp5 = z(k) - H*x'(k)
+    temp5 = measurement - measurementMatrix*statePre;
+ 
+    // x(k) = x'(k) + K(k)*temp5
+    statePost = statePre + gain*temp5;
+ 
+    // P(k) = P'(k) - K(k)*temp2
+    errorCovPost = errorCovPre - gain*temp2;
+ 
+    return statePost;
+}
+		
+
+CV_PROP_RW Mat statePre;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)  预测值
+CV_PROP_RW Mat statePost;          //!< corrected state (x(k)): x(k)=x'(k)+K(k)*(z(k)-H*x'(k))  状态值
+CV_PROP_RW Mat transitionMatrix;   //!< state transition matrix (A)  状态转移矩阵 (A)
+CV_PROP_RW Mat controlMatrix;      //!< control matrix (B) (not used if there is no control)  控制矩阵 B 
+CV_PROP_RW Mat measurementMatrix;  //!< measurement matrix (H)  测量矩阵 H
+CV_PROP_RW Mat processNoiseCov;    //!< process noise covariance matrix (Q)  系统误差 Q
+CV_PROP_RW Mat measurementNoiseCov;//!< measurement noise covariance matrix (R)  测量误差 R
+CV_PROP_RW Mat errorCovPre;        //!< priori error estimate covariance matrix (P'(k)): P'(k)=A*P(k-1)*At + Q)*/  最小均方误差
+CV_PROP_RW Mat gain;               //!< Kalman gain matrix (K(k)): K(k)=P'(k)*Ht*inv(H*P'(k)*Ht+R)  卡尔曼增益
+CV_PROP_RW Mat errorCovPost;       //!< posteriori error estimate covariance matrix (P(k)): P(k)=(I-K(k)*H)*P'(k)  修正的最小均方误差
+
+
+注意：KalmanFilter结构体中并没有测量值，测量值需要自己定义，而且一定要定义，因为后面要用。
+编程步骤
+step1：定义KalmanFilter类并初始化
+	//构造KF对象
+	KalmanFilter KF(DP, MP, 0);
+	
+	//初始化相关参数
+	KF.transitionMatrix ? ? ? ? ? ? ? ? ? ? ? ? 转移矩阵A
+	KF.measurementMatrix ? ? ? ? ? ? ? ? ?测量矩阵H
+	KF.processNoiseCov ? ? ? ? ? ? ? ? ? ? 过程噪声Q
+	KF.measurementNoiseCov ? ? ? ? ? ?测量噪声R
+	KF.errorCovPost ? ? ? ? ? ? ? ? ? ? ? ? ? ?最小均方误差P
+	KF.statePost ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ?系统初始状态x(0)
+	Mat measurement ? ? ? ? ? ? ? ? ? ? ? ? ?定义初始测量值z(0)
+	
+step2：预测
+	KF.predict( ) ? ? ? ? ? //返回的是下一时刻的状态值KF.statePost (k+1)?
+
+step3：更新
+	更新measurement; ? //注意measurement不能通过观测方程进行计算得到，要自己定义！
+	更新KF    KF.correct(measurement)
+	
+最终的结果应该是更新后的statePost.
+
+
+
+卡尔曼滤波:
+		你可以在任何含有不确定信息的动态系统中使用卡尔曼滤波，对系统下一步的走向做出有根据的预测，
+				即使伴随着各种干扰，卡尔曼滤波总是能指出真实发生的情况。 
+　　在连续变化的系统中使用卡尔曼滤波是非常理想的，它具有占用内存小的优点（除了前一个状态量外，不需要保留其它历史数据），
+				并且速度很快，很适合应用于实时问题和嵌入式系统。 
+
+
+
+
+https://blog.csdn.net/lwx309025167/article/details/78327554
+KF算法学习（一）：算法原理与推导
+
+
+
+
